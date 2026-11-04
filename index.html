@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Election Night 2026</title>
+<style>
+:root{--bg:#fff;--fg:#111;--dim:#888;--rule:#ddd;--d:#1a5fd1;--r:#d12a2a;--i:#b8860b;--hi:#fffbe0}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e8e8e8;--dim:#777;--rule:#333;--d:#5b9bff;--r:#ff6b6b;--i:#e0b84a;--hi:#2a2610}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:14px;margin:0}
+.dim{color:var(--dim)} .D{color:var(--d)} .R{color:var(--r)} .I,.L,.G{color:var(--i)}
+hr{border:0;border-top:1px dashed var(--rule);margin:10px 0}
+.sec{font-weight:bold;margin:18px 0 4px}
+.bal{white-space:pre;overflow:hidden}
+.bar{display:flex;height:10px;margin:4px 0 2px;position:relative;background:var(--rule)}
+.bar span{height:100%}
+.bar .mid{position:absolute;left:50%;top:-3px;bottom:-3px;border-left:1px solid var(--fg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 24px}
+.race{padding:6px 0;border-bottom:1px dashed var(--rule)}
+.race .hd{display:flex;justify-content:space-between}
+.c{display:flex;gap:6px;white-space:nowrap}
+.c .n{flex:1;overflow:hidden;text-overflow:ellipsis}
+.c .p{width:5.5ch;text-align:right} .c .v{width:6ch;text-align:right}
+.won{font-weight:bold}
+.flip{background:var(--hi)}
+a{color:inherit}
+</style>
+</head>
+<body>
+<main>
+  <h1>ELECTION NIGHT 2026 <span class="dim" id="meta">· loading…</span></h1>
+  <div id="err" class="R"></div>
+  <hr>
+  <div id="bal"></div>
+  <div id="races"></div>
+  <hr>
+  <div class="dim">Results: <a href="https://civicapi.org">civicAPI</a>. Calls as reported by source. Auto-refresh 60s.</div>
+</main>
+<script>
+const BASE = "https://civicapi.org/api/v2", DATE = "2026-11-03", EVERY = 60000;
+const DEMO = new URLSearchParams(location.search).has("demo");
+
+// Edit this list to change what's pinned. [state, office, note]
+const WATCH = [
+  ["GA","senate","D-held"], ["MI","senate","open, D-held"], ["NC","senate","open, R-held"],
+  ["ME","senate","R-held"], ["NH","senate","open, D-held"], ["OH","senate","special"],
+  ["TX","senate","R-held"], ["IA","senate","open, R-held"], ["AK","senate","R-held"],
+  ["MN","senate","open, D-held"], ["NE","senate","R vs. indep."],
+  ["AZ","governor",""], ["GA","governor","open"], ["MI","governor","open"],
+  ["WI","governor","open"], ["PA","governor",""], ["NV","governor",""],
+];
+const SEATS = {senate:{total:100,need:51,hold:{D:34,R:31,I:0}}, house:{total:435,need:218,hold:{D:0,R:0,I:0}}};
+const PRIOR = {}; WATCH.forEach(([s,o,n])=>{ if(/D-held/.test(n)) PRIOR[s+o]="D"; if(/R-held/.test(n)) PRIOR[s+o]="R"; });
+
+const pick=(o,...ks)=>{for(const k of ks) if(o&&o[k]!=null&&o[k]!=="") return o[k];};
+const list=p=>Array.isArray(p)?p:(p.races||p.results||p.data||p.items||[]);
+const party=p=>{p=String(p||"").toUpperCase(); if(/^(D|DEM)/.test(p))return"D"; if(/^(R|REP|GOP)/.test(p))return"R"; return p?"I":"?";};
+const office=n=>{n=(n||"").toLowerCase(); if(n.includes("state"))return"other";
+  if(n.includes("senate"))return"senate"; if(n.includes("house")||n.includes("congress"))return"house";
+  if(n.includes("governor")&&!n.includes("lieutenant"))return"governor"; return"other";};
+const fmt=n=>n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?Math.round(n/1e3)+"K":String(n);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const get=async(path,params={})=>{const r=await fetch(BASE+path+"?"+new URLSearchParams(params)); if(!r.ok) throw new Error(r.status); return r.json();};
+
+function norm(raw, meta){
+  const r = raw.race || raw;
+  const cands = (pick(r,"candidates","results")||[]).map(c=>({
+    name: pick(c,"name","candidate_name","candidate")||"?",
+    party: party(pick(c,"party","party_name","party_code")),
+    votes: +pick(c,"votes","vote_count","total_votes")||0,
+    won: !!pick(c,"winner","is_winner","called","elected"),
+  })).sort((a,b)=>b.votes-a.votes);
+  const tot = cands.reduce((s,c)=>s+c.votes,0)||1;
+  cands.forEach(c=>c.pct=100*c.votes/tot);
+  const name = pick(r,"election_name","name","race_name")||pick(meta,"election_name","name")||"";
+  let rep = parseFloat(pick(r,"percent_reporting","pct_reporting","reporting","expected_vote_pct"));
+  let winner = cands.find(c=>c.won);
+  const w = pick(r,"winner","called_for");
+  if(!winner && typeof w==="string") winner = cands.find(c=>c.name.toLowerCase().includes(w.toLowerCase()));
+  return {name, state:String(pick(r,"province","state")||pick(meta,"province","state")||"??").slice(0,2).toUpperCase(),
+          office:office(name), cands, rep:isNaN(rep)?null:rep, winner};
+}
+
+async function searchAll(){
+  let out=[], off=0;
+  for(;;){ const p=list(await get("/race/search",{country:"US",startDate:DATE,endDate:DATE,limit:100,offset:off}));
+    out=out.concat(p); if(p.length<100||off>6000) break; off+=100; }
+  return out;
+}
+
+// House: tally calls across all House races (fetch details in small batches).
+async function load(){
+  const metas = (await searchAll()).map(m=>({m, o:office(pick(m,"election_name","name")), s:String(pick(m,"province","state")||"").slice(0,2).toUpperCase()}));
+  const want = metas.filter(x => x.o==="house" || x.o==="senate" ||
+    WATCH.some(([s,o])=>s===x.s && o===x.o));
+  const races=[];
+  for(let i=0;i<want.length;i+=10){
+    const batch = await Promise.all(want.slice(i,i+10).map(x=>
+      get("/race/"+pick(x.m,"id","race_id"),{light:"true"}).then(r=>norm(r,x.m)).catch(()=>null)));
+    races.push(...batch.filter(Boolean));
+  }
+  return races;
+}
+
+function demo(){
+  const names={GA:["Ossoff","Challenger"],MI:["Dem","Rep"],NC:["Dem","Rep"],ME:["Dem","Collins"]};
+  return WATCH.map(([s,o],i)=>{const rep=[0,15,48,72,91,100][(i+Date.now()/30000|0)%6];
+    const d=Math.round((40+Math.random()*20)*rep*900), r=Math.round((40+Math.random()*20)*rep*900);
+    const [dn,rn]=names[s]&&o==="senate"?names[s]:["Dem. candidate","Rep. candidate"];
+    const win=rep===100?(d>r?"D":"R"):null;
+    return norm({election_name:`${s} ${o==="senate"?"U.S. Senate":"Governor"}`,province:s,percent_reporting:rep,
+      candidates:[{name:dn,party:"D",votes:d,winner:win==="D"},{name:rn,party:"R",votes:r,winner:win==="R"}]},{});
+  }).concat(Array.from({length:300},()=>({office:"house",cands:[],winner:Math.random()<.5?{party:Math.random()<.5?"D":"R"}:null})));
+}
+
+function balance(races, o){
+  const {total,need,hold}=SEATS[o], w={...hold};
+  races.filter(r=>r.office===o&&r.winner).forEach(r=>w[r.winner.party in w?r.winner.party:"I"]++);
+  const left=total-w.D-w.R-w.I, pct=n=>(100*n/total)+"%";
+  return `<div class="sec">${o.toUpperCase()} <span class="dim">· ${need} for control</span></div>
+  <div class="bal"><span class="D">D ${w.D}</span>${w.I?`  <span class="I">I ${w.I}</span>`:""}  <span class="dim">${left} uncalled</span>  <span class="R">R ${w.R}</span></div>
+  <div class="bar"><span style="width:${pct(w.D)};background:var(--d)"></span><span style="width:${pct(w.I)};background:var(--i)"></span>
+  <span style="flex:1"></span><span style="width:${pct(w.R)};background:var(--r)"></span><i class="mid"></i></div>`;
+}
+
+function card(r, note){
+  const flip = r.winner && PRIOR[r.state+r.office] && PRIOR[r.state+r.office]!==r.winner.party;
+  const st = r.winner ? `<span class="${r.winner.party}">✓ ${r.winner.party} ${flip?"FLIP":"HOLD"}</span>`
+           : !r.rep ? `<span class="dim">no votes yet</span>` : `${Math.round(r.rep)}% in`;
+  const rows = r.cands.slice(0,2).map(c=>`<div class="c ${c.won?"won":""}"><span>${c.won?"✓":" "}</span>
+    <span class="${c.party}">${c.party}</span><span class="n">${esc(c.name)}</span>
+    <span class="p">${c.pct.toFixed(1)}%</span><span class="v dim">${fmt(c.votes)}</span></div>`).join("");
+  const m = r.cands.length>1 && r.cands[0].votes ? `<div class="dim">${r.cands[0].party} +${(r.cands[0].pct-r.cands[1].pct).toFixed(1)}</div>`:"";
+  return `<div class="race ${flip?"flip":""}"><div class="hd"><b>${r.state}</b>${st}</div>
+    ${note?`<div class="dim">${esc(note)}</div>`:""}${rows||'<div class="dim">no data</div>'}${m}</div>`;
+}
+
+function render(races){
+  document.getElementById("bal").innerHTML = balance(races,"senate")+balance(races,"house");
+  let html="";
+  for(const o of ["senate","governor"]){
+    const items = WATCH.filter(w=>w[1]===o).map(([s,,n])=>({r:races.find(r=>r.state===s&&r.office===o),n,s}));
+    const done = items.filter(x=>x.r&&x.r.winner).length;
+    html += `<div class="sec">${o==="senate"?"KEY SENATE":"KEY GOVERNOR"} <span class="dim">· ${done}/${items.length} called</span></div><div class="grid">`;
+    html += items.map(x=>x.r?card(x.r,x.n):`<div class="race"><b>${x.s}</b> <span class="dim">· not found in feed</span></div>`).join("");
+    html += "</div>";
+  }
+  document.getElementById("races").innerHTML = html;
+}
+
+async function tick(){
+  const err=document.getElementById("err");
+  try{ render(DEMO?demo():await load()); err.textContent="";
+    document.getElementById("meta").textContent=`· Nov 3 · updated ${new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}${DEMO?" · DEMO DATA":""}`;
+  }catch(e){ err.textContent=`Fetch failed (${e.message}). Showing last good data.`; }
+  setTimeout(tick, EVERY);
+}
+tick();
+</script>
+</body>
+</html>
