@@ -37,10 +37,10 @@ a{color:inherit}
   <div id="bal"></div>
   <div id="races"></div>
   <hr>
-  <div class="dim">Results: <a href="https://civicapi.org">civicAPI</a>. Calls as reported by source. Auto-refresh 60s.</div>
+  <div class="dim">Results: <a href="https://civicapi.org">civicAPI</a>. Calls as reported by source. Data updates ~every 15 min.</div>
 </main>
 <script>
-const BASE = "https://civicapi.org/api/v2", DATE = "2026-11-03", EVERY = 60000;
+const BASE = "https://civicapi.org/api/v2", DATE = "2026-11-03", EVERY = 300000;
 const DEMO = new URLSearchParams(location.search).has("demo");
 
 // Edit this list to change what's pinned. [state, office, note]
