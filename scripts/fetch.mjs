@@ -43,10 +43,10 @@ const search = (label, q, off = 0) => get("/race/search", { ...q, country: "US",
   .catch(e => { diag.pages[`${label}@${off}`] = "ERR " + e.message; return []; });
 
 // Targeted searches by race type, all in parallel; each can take ~45-90s tonight.
-const QUERIES = { senate: { query: "Senate" }, house: { query: "House of Representatives" }, gov: { query: "Governor" } };
-const jobs = [];
-for (const off of [0, PAGE, 2 * PAGE]) jobs.push(search("senate", QUERIES.senate, off), search("house", QUERIES.house, off));
-jobs.push(search("gov", QUERIES.gov));
+const QUERIES = { senate: { query: "Senate" }, house: { query: "US House" }, house2: { query: "House of Representatives" }, gov: { query: "Governor" } };
+const jobs = [search("gov", QUERIES.gov), search("house2", QUERIES.house2)];
+for (const off of [0, PAGE, 2 * PAGE]) jobs.push(search("senate", QUERIES.senate, off));
+for (let off = 0; off < 8 * PAGE; off += PAGE) jobs.push(search("house", QUERIES.house, off));
 const seen = new Set(), all = [];
 for (const m of (await Promise.all(jobs)).flat()) if (!seen.has(m.id)) { seen.add(m.id); all.push(m); }
 const total = all.length;
@@ -58,9 +58,9 @@ for (const m of all) {
   const o = office(m);
   if (o === "other") continue;
   const cands = (m.candidates || [])
-    .filter(c => c.votes > 0 || c.winner || (c.party && !/write-?in|nonpartisan/i.test(c.party)))
-    .map(c => ({ name: c.name, party: party(c.party), votes: c.votes || 0, won: !!c.winner }))
-    .sort((a, b) => b.votes - a.votes);
+    .filter(c => c.votes > 0 || c.winner || c.major_candidate)
+    .sort((a, b) => (b.votes || 0) - (a.votes || 0) || (b.major_candidate ? 1 : 0) - (a.major_candidate ? 1 : 0))
+    .map(c => ({ name: String(c.name).replace(/\s+/g, " "), party: party(c.party), votes: c.votes || 0, won: !!c.winner }));
   const r = { state: String(m.province || "").toUpperCase(), district: m.district || "", office: o,
     name: m.election_name, rep: m.percent_reporting ?? null, cands };
   // Full detail only for pinned races; the rest just need the call for seat totals.
