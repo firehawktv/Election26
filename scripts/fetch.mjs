@@ -76,3 +76,20 @@ const out = races.map(r => WATCH.includes(`${r.state} ${r.office}`) ? r
 writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out }));
 console.log(`${Date.now() > DEADLINE ? "PARTIAL (deadline) " : ""}search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
 if (metas[0]) console.log("sample search item keys:", Object.keys(metas[0]).join(","));
+
+// Diagnostics: when nothing matched, record what civicAPI actually returns so the filters can be fixed.
+if (!metas.length) {
+  const probe = {};
+  for (const [k, p] of Object.entries({
+    dated: { query: "Senate", country: "US", startDate: DATE, endDate: DATE, limit: 3 },
+    nodate: { query: "Senate", country: "US", limit: 3 },
+    country_only: { country: "US", limit: 3 },
+    dates_api: null,
+  })) {
+    try {
+      const r = p ? await get("/race/search", p) : await get("/getElectionDates", { year: 2026, country: "US" });
+      probe[k] = JSON.stringify(r).slice(0, 1500);
+    } catch (e) { probe[k] = "ERR " + e.message; }
+  }
+  writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: 0, races: [], probe }));
+}
