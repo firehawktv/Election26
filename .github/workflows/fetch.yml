@@ -4,27 +4,34 @@ on:
     paths: [".github/workflows/fetch.yml", "scripts/**"]
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"   # GitHub may delay scheduled runs a few minutes
+    - cron: "7 */3 * * *"   # backup restart only; GitHub's scheduler is unreliable
 concurrency:
   group: fetch
-  cancel-in-progress: true
+  cancel-in-progress: false   # a backup start waits instead of killing the running loop
 permissions:
   contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: node scripts/fetch.mjs
-      - name: Commit data.json
+      - name: Fetch every 15 minutes for ~6 hours
         run: |
-          if [ -n "$(git status --porcelain data.json)" ]; then
-            git config user.name "results-bot"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data.json
-            git commit -qm "results $(date -u +%H:%M)"
-            git pull -q --rebase origin main && git push -q origin HEAD:main
-          fi
+          git config user.name "results-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          end=$(( $(date +%s) + 340*60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            start=$(date +%s)
+            git pull -q --rebase origin main || true
+            timeout 13m node scripts/fetch.mjs || echo "fetch failed; keeping last data"
+            if [ -n "$(git status --porcelain data.json)" ]; then
+              git add data.json
+              git commit -qm "results $(date -u +%H:%M)"
+              git push -q origin HEAD:main || { git pull -q --rebase origin main && git push -q origin HEAD:main; } || echo "push failed"
+            fi
+            wait=$(( 900 - ($(date +%s) - start) ))
+            [ "$wait" -gt 0 ] && sleep "$wait"
+          done
