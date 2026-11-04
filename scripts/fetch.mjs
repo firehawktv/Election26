@@ -29,8 +29,8 @@ function office(m) {
   const n = String(m.election_name || "").toLowerCase();
   if (/state|lieutenant|shadow|delegate/.test(t) || /lieutenant|shadow/.test(n)) return "other";
   if (t.includes("senate")) return "senate";
-  if (t.includes("house") || t.includes("representative") || t.includes("congress")) return "house";
-  if (t.includes("governor")) return "governor";
+  if (t === "house of representatives" || t === "us house" || t === "u.s. house") return "house";
+  if (t === "governor") return "governor";
   return "other";
 }
 const party = p => { p = String(p || "").toUpperCase();
@@ -43,13 +43,10 @@ const search = (label, q, off = 0) => get("/race/search", { ...q, country: "US",
   .catch(e => { diag.pages[`${label}@${off}`] = "ERR " + e.message; return []; });
 
 // Targeted searches by race type, all in parallel; each can take ~45-90s tonight.
-const QUERIES = {
-  type_senate: { election_type: "US Senate" }, type_house: { election_type: "US House" },
-  q_senate: { query: "US Senate" }, q_house: { query: "US House" }, q_gov: { query: "Governor" },
-};
-const jobs = Object.entries(QUERIES).map(([l, q]) => search(l, q));
-// US House can exceed one page.
-jobs.push(search("type_house", QUERIES.type_house, PAGE), search("q_house", QUERIES.q_house, PAGE));
+const QUERIES = { senate: { query: "Senate" }, house: { query: "House of Representatives" }, gov: { query: "Governor" } };
+const jobs = [];
+for (const off of [0, PAGE, 2 * PAGE]) jobs.push(search("senate", QUERIES.senate, off), search("house", QUERIES.house, off));
+jobs.push(search("gov", QUERIES.gov));
 const seen = new Set(), all = [];
 for (const m of (await Promise.all(jobs)).flat()) if (!seen.has(m.id)) { seen.add(m.id); all.push(m); }
 const total = all.length;
