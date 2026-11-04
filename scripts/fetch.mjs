@@ -27,7 +27,7 @@ async function get(path, params = {}) {
 function office(m) {
   const t = String(m.type || m.election_type || "").toLowerCase();
   const n = String(m.election_name || "").toLowerCase();
-  if (t.includes("state") || t.includes("lieutenant") || n.includes("lieutenant")) return "other";
+  if (/state|lieutenant|shadow|delegate/.test(t) || /lieutenant|shadow/.test(n)) return "other";
   if (t.includes("senate")) return "senate";
   if (t.includes("house") || t.includes("representative") || t.includes("congress")) return "house";
   if (t.includes("governor")) return "governor";
@@ -38,16 +38,21 @@ const party = p => { p = String(p || "").toUpperCase();
   if (p.startsWith("LIB")) return "L"; if (p.startsWith("GRE")) return "G"; return "I"; };
 
 const diag = { pages: {}, types: {} };
-const pageAt = off => get("/race/search", { country: "US", startDate: DATE, endDate: DATE, limit: PAGE, offset: off })
-  .then(r => { diag.pages[off] = (r.races || []).length; return r; })
-  .catch(e => { diag.pages[off] = "ERR " + e.message; return null; });
+const search = (label, q, off = 0) => get("/race/search", { ...q, country: "US", startDate: DATE, endDate: DATE, limit: PAGE, offset: off })
+  .then(r => { diag.pages[`${label}@${off}`] = (r.races || []).length; return r.races || []; })
+  .catch(e => { diag.pages[`${label}@${off}`] = "ERR " + e.message; return []; });
 
-// First page tells us the total; fetch the rest in parallel (each call can take ~45-90s tonight).
-const first = await pageAt(0);
-const total = first?.count ?? 0;
-const rest = [];
-for (let off = PAGE; off < Math.min(total, 20000); off += PAGE) rest.push(pageAt(off));
-const all = [first, ...(await Promise.all(rest))].filter(Boolean).flatMap(r => r.races || []);
+// Targeted searches by race type, all in parallel; each can take ~45-90s tonight.
+const QUERIES = {
+  type_senate: { election_type: "US Senate" }, type_house: { election_type: "US House" },
+  q_senate: { query: "US Senate" }, q_house: { query: "US House" }, q_gov: { query: "Governor" },
+};
+const jobs = Object.entries(QUERIES).map(([l, q]) => search(l, q));
+// US House can exceed one page.
+jobs.push(search("type_house", QUERIES.type_house, PAGE), search("q_house", QUERIES.q_house, PAGE));
+const seen = new Set(), all = [];
+for (const m of (await Promise.all(jobs)).flat()) if (!seen.has(m.id)) { seen.add(m.id); all.push(m); }
+const total = all.length;
 diag.total = total;
 
 const races = [];
