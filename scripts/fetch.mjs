@@ -18,7 +18,7 @@ const st = o => String(pick(o, "province", "state") || "").slice(0, 2).toUpperCa
 async function get(path, params = {}) {
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" } });
+      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(20000) });
       if (r.ok) return r.json();
       console.log(`${path} ${JSON.stringify(params)} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       if (r.status < 500 && r.status !== 429) throw new Error(`HTTP ${r.status}`);
@@ -45,15 +45,25 @@ function norm(raw, meta) {
 }
 
 const metas = [];
-for (let off = 0; off < 6000; off += 100) {
-  const p = list(await get("/race/search", { country: "US", startDate: DATE, endDate: DATE, limit: 100, offset: off }));
-  metas.push(...p); if (p.length < 100) break;
+// Targeted searches instead of paging every local race on the ballot.
+const DEADLINE = Date.now() + 6 * 60e3;
+const seen = new Set();
+for (const query of ["Senate", "Governor", "House", "Congress"]) {
+  for (let off = 0; off < 1000 && Date.now() < DEADLINE; off += 100) {
+    let p = [];
+    try { p = list(await get("/race/search", { query, country: "US", startDate: DATE, endDate: DATE, limit: 100, offset: off })); }
+    catch (e) { console.log(`search ${query} @${off} failed: ${e.message}`); break; }
+    for (const m of p) { const id = pick(m, "id", "race_id"); if (!seen.has(id)) { seen.add(id); metas.push(m); } }
+    if (p.length < 100) break;
+  }
 }
+const watched = m => WATCH.includes(`${st(m)} ${office(pick(m, "election_name", "name"))}`);
 const want = metas.filter(m => { const o = office(pick(m, "election_name", "name"));
-  return o === "senate" || o === "house" || WATCH.includes(`${st(m)} ${o}`); });
+  return o === "senate" || o === "house" || watched(m); })
+  .sort((a, b) => watched(b) - watched(a));   // pinned races first
 
 const races = [];
-for (let i = 0; i < want.length; i += 8) {
+for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 8) {
   const b = await Promise.all(want.slice(i, i + 8).map(m =>
     get("/race/" + pick(m, "id", "race_id"), { light: "true" }).then(r => norm(r, m)).catch(() => null)));
   races.push(...b.filter(Boolean));
@@ -64,5 +74,5 @@ const out = races.map(r => WATCH.includes(`${r.state} ${r.office}`) ? r
   : { state: r.state, office: r.office, cands: r.cands.filter(c => c.won).map(c => ({ party: c.party, won: true })) });
 
 writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out }));
-console.log(`search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
+console.log(`${Date.now() > DEADLINE ? "PARTIAL (deadline) " : ""}search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
 if (metas[0]) console.log("sample search item keys:", Object.keys(metas[0]).join(","));
