@@ -47,12 +47,15 @@ function norm(raw, meta) {
 const metas = [];
 // Targeted searches instead of paging every local race on the ballot.
 const DEADLINE = Date.now() + 6 * 60e3;
-const seen = new Set();
+const seen = new Set(), diag = { searches: {}, rawSearch: null, rawSearchTop: null, rawRace: null };
 for (const query of ["Senate", "Governor", "House", "Congress"]) {
   for (let off = 0; off < 1000 && Date.now() < DEADLINE; off += 100) {
     let p = [];
-    try { p = list(await get("/race/search", { query, country: "US", startDate: DATE, endDate: DATE, limit: 100, offset: off })); }
-    catch (e) { console.log(`search ${query} @${off} failed: ${e.message}`); break; }
+    try { const raw = await get("/race/search", { query, country: "US", startDate: DATE, endDate: DATE, limit: 100, offset: off });
+      p = list(raw); diag.searches[`${query}@${off}`] = p.length;
+      if (!diag.rawSearchTop) diag.rawSearchTop = Array.isArray(raw) ? "array" : Object.keys(raw).join(",");
+      if (!diag.rawSearch && p[0]) diag.rawSearch = JSON.stringify(p[0]).slice(0, 1500); }
+    catch (e) { diag.searches[`${query}@${off}`] = "ERR " + e.message; break; }
     for (const m of p) { const id = pick(m, "id", "race_id"); if (!seen.has(id)) { seen.add(id); metas.push(m); } }
     if (p.length < 100) break;
   }
@@ -65,7 +68,7 @@ const want = metas.filter(m => { const o = office(pick(m, "election_name", "name
 const races = [];
 for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 8) {
   const b = await Promise.all(want.slice(i, i + 8).map(m =>
-    get("/race/" + pick(m, "id", "race_id"), { light: "true" }).then(r => norm(r, m)).catch(() => null)));
+    get("/race/" + pick(m, "id", "race_id"), { light: "true" }).then(r => { if (!diag.rawRace) diag.rawRace = JSON.stringify(r).slice(0, 2500); return norm(r, m); }).catch(() => null)));
   races.push(...b.filter(Boolean));
 }
 
@@ -73,7 +76,7 @@ for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 8) {
 const out = races.map(r => WATCH.includes(`${r.state} ${r.office}`) ? r
   : { state: r.state, office: r.office, cands: r.cands.filter(c => c.won).map(c => ({ party: c.party, won: true })) });
 
-writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out }));
+writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out, diag }));
 console.log(`${Date.now() > DEADLINE ? "PARTIAL (deadline) " : ""}search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
 if (metas[0]) console.log("sample search item keys:", Object.keys(metas[0]).join(","));
 
