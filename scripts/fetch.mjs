@@ -18,7 +18,7 @@ const st = o => String(pick(o, "province", "state") || "").slice(0, 2).toUpperCa
 async function get(path, params = {}) {
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(20000) });
+      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(60000) });
       if (r.ok) return r.json();
       console.log(`${path} ${JSON.stringify(params)} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       if (r.status < 500 && r.status !== 429) throw new Error(`HTTP ${r.status}`);
