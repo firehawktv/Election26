@@ -75,6 +75,9 @@ for (const m of all) {
     : { state: r.state, district: r.district, office: o, cands: cands.filter(c => c.won).map(c => ({ party: c.party, won: true })) });
 }
 
+// If civicAPI failed every request, leave the last good file (and its timestamp) untouched.
+if (!all.length) { console.log("all requests failed", JSON.stringify(diag.pages)); process.exit(0); }
+
 // civicAPI sometimes 502s a page; keep races from the last good run instead of dropping them.
 const key = r => `${r.state}|${r.office}|${r.district || ""}`;
 const have = new Set(races.map(key));
