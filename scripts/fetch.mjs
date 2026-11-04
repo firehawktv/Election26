@@ -20,8 +20,9 @@ async function get(path, params = {}) {
     try {
       const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" } });
       if (r.ok) return r.json();
+      console.log(`${path} ${JSON.stringify(params)} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       if (r.status < 500 && r.status !== 429) throw new Error(`HTTP ${r.status}`);
-    } catch (e) { if (i === 2) throw e; }
+    } catch (e) { console.log(`${path} error: ${e.message} ${e.cause?.code || ""}`); if (i === 2) throw e; }
     await new Promise(s => setTimeout(s, 2000 * (i + 1)));
   }
   throw new Error("retries exhausted");
