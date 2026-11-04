@@ -38,14 +38,21 @@ const party = p => { p = String(p || "").toUpperCase();
   if (p.startsWith("LIB")) return "L"; if (p.startsWith("GRE")) return "G"; return "I"; };
 
 const diag = { pages: {}, types: {} };
-const search = (label, q, off = 0) => get("/race/search", { ...q, country: "US", startDate: DATE, endDate: DATE, limit: PAGE, offset: off })
+// civicAPI is straining tonight (500/503/524s); never send more than 4 requests at once.
+let active = 0; const waiters = [];
+async function limited(fn) {
+  if (active >= 4) await new Promise(r => waiters.push(r));
+  active++;
+  try { return await fn(); } finally { active--; waiters.shift()?.(); }
+}
+const search = (label, q, off = 0) => limited(() => get("/race/search", { ...q, country: "US", startDate: DATE, endDate: DATE, limit: PAGE, offset: off })
   .then(r => { diag.pages[`${label}@${off}`] = (r.races || []).length; return r.races || []; })
-  .catch(e => { diag.pages[`${label}@${off}`] = "ERR " + e.message; return []; });
+  .catch(e => { diag.pages[`${label}@${off}`] = "ERR " + e.message; return []; }));
 
 // Targeted searches by race type, all in parallel; each can take ~45-90s tonight.
 const QUERIES = { senate: { query: "Senate" }, house: { query: "US House" }, house2: { query: "House of Representatives" }, gov: { query: "Governor" } };
-const jobs = [search("gov", QUERIES.gov), search("house2", QUERIES.house2)];
-for (const off of [0, PAGE, 2 * PAGE]) jobs.push(search("senate", QUERIES.senate, off));
+const jobs = [search("senate", QUERIES.senate, 0), search("gov", QUERIES.gov),
+  search("senate", QUERIES.senate, PAGE), search("senate", QUERIES.senate, 2 * PAGE), search("house2", QUERIES.house2)];
 for (let off = 0; off < 10 * PAGE; off += PAGE) jobs.push(search("house", QUERIES.house, off));
 const seen = new Set(), all = [];
 for (const m of (await Promise.all(jobs)).flat()) if (!seen.has(m.id)) { seen.add(m.id); all.push(m); }
