@@ -1,81 +1,70 @@
-// Pulls 2026 general-election races from civicAPI and writes data.json for the page.
-// Runs in GitHub Actions (server side, so no CORS). Node 20+, no deps.
+// Pulls Nov 3 2026 races from civicAPI and writes data.json for the page.
+// civicAPI's search results already carry candidates, votes, winners and % reporting,
+// so this pages the dated search only (no per-race calls). Node 20+, no deps.
 import { writeFileSync } from "node:fs";
 
-const BASE = "https://civicapi.org/api/v2", DATE = "2026-11-03";
+const BASE = "https://civicapi.org/api/v2", DATE = "2026-11-03", PAGE = 500;
 const WATCH = ["GA senate","MI senate","NC senate","ME senate","NH senate","OH senate","TX senate",
   "IA senate","AK senate","MN senate","NE senate","AZ governor","GA governor","MI governor",
   "WI governor","PA governor","NV governor"];
 
-const pick = (o, ...ks) => { for (const k of ks) if (o && o[k] != null && o[k] !== "") return o[k]; };
-const list = p => Array.isArray(p) ? p : (p.races || p.results || p.data || p.items || []);
-const party = p => { p = String(p || "").toUpperCase(); if (/^(D|DEM)/.test(p)) return "D"; if (/^(R|REP|GOP)/.test(p)) return "R"; return p ? "I" : "?"; };
-const office = n => { n = (n || "").toLowerCase(); if (n.includes("state")) return "other";
-  if (n.includes("senate")) return "senate"; if (n.includes("house") || n.includes("congress")) return "house";
-  if (n.includes("governor") && !n.includes("lieutenant")) return "governor"; return "other"; };
-const st = o => String(pick(o, "province", "state") || "").slice(0, 2).toUpperCase();
-
 async function get(path, params = {}) {
+  let last;
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(90000) });
+      const r = await fetch(BASE + path + "?" + new URLSearchParams(params),
+        { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(150000) });
       if (r.ok) return r.json();
-      console.log(`${path} ${JSON.stringify(params)} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
-      if (r.status < 500 && r.status !== 429) throw new Error(`HTTP ${r.status}`);
-    } catch (e) { console.log(`${path} error: ${e.message} ${e.cause?.code || ""}`); if (i === 2) throw e; }
-    await new Promise(s => setTimeout(s, 2000 * (i + 1)));
+      last = new Error(`HTTP ${r.status}`);
+      if (r.status < 500 && r.status !== 429) break;
+    } catch (e) { last = e; }
+    await new Promise(s => setTimeout(s, 3000 * (i + 1)));
   }
-  throw new Error("retries exhausted");
+  throw last;
 }
 
-function norm(raw, meta) {
-  const r = raw.race || raw;
-  const cands = (pick(r, "candidates", "results") || []).map(c => ({
-    name: pick(c, "name", "candidate_name", "candidate") || "?",
-    party: party(pick(c, "party", "party_name", "party_code")),
-    votes: +pick(c, "votes", "vote_count", "total_votes") || 0,
-    won: !!pick(c, "winner", "is_winner", "called", "elected"),
-  })).sort((a, b) => b.votes - a.votes);
-  const w = pick(r, "winner", "called_for");
-  if (!cands.some(c => c.won) && typeof w === "string")
-    cands.forEach(c => { if (c.name.toLowerCase().includes(w.toLowerCase())) c.won = true; });
-  const name = pick(r, "election_name", "name", "race_name") || pick(meta, "election_name", "name") || "";
-  const rep = parseFloat(pick(r, "percent_reporting", "pct_reporting", "reporting", "expected_vote_pct"));
-  return { name, state: st(r) || st(meta), office: office(name), rep: isNaN(rep) ? null : rep, cands };
+// "type" is the reliable field (e.g. "US Senate", "State Senate", "Governor", "Lieutenant Governor").
+function office(m) {
+  const t = String(m.type || m.election_type || "").toLowerCase();
+  const n = String(m.election_name || "").toLowerCase();
+  if (t.includes("state") || t.includes("lieutenant") || n.includes("lieutenant")) return "other";
+  if (t.includes("senate")) return "senate";
+  if (t.includes("house") || t.includes("representative") || t.includes("congress")) return "house";
+  if (t.includes("governor")) return "governor";
+  return "other";
 }
+const party = p => { p = String(p || "").toUpperCase();
+  if (p.startsWith("DEM")) return "D"; if (p.startsWith("REP")) return "R";
+  if (p.startsWith("LIB")) return "L"; if (p.startsWith("GRE")) return "G"; return "I"; };
 
-const metas = [];
-// Targeted searches instead of paging every local race on the ballot.
-const DEADLINE = Date.now() + 9 * 60e3;
-const seen = new Set(), diag = { searches: {}, rawSearch: null, rawSearchTop: null, rawRace: null };
-const SEARCHES = { Senate: { query: "Senate" }, Governor: { query: "Governor" }, House: { query: "House" },
-  Representative: { query: "Representative" }, all_dated: {} };
-await Promise.all(Object.entries(SEARCHES).map(async ([label, q]) => {
-  try {
-    const raw = await get("/race/search", { ...q, country: "US", startDate: DATE, endDate: DATE, limit: 500 });
-    const p = list(raw);
-    diag.searches[label] = p.length;
-    if (!diag.rawSearchTop) diag.rawSearchTop = Array.isArray(raw) ? "array" : Object.keys(raw).join(",");
-    if (p[0]) diag.samples = { ...(diag.samples || {}), [label]: JSON.stringify(p[0]).slice(0, 1200) };
-    for (const m of p) { const id = pick(m, "id", "race_id"); if (!seen.has(id)) { seen.add(id); metas.push(m); } }
-  } catch (e) { diag.searches[label] = "ERR " + e.message; }
-}));
-const watched = m => WATCH.includes(`${st(m)} ${office(pick(m, "election_name", "name"))}`);
-const want = metas.filter(m => { const o = office(pick(m, "election_name", "name"));
-  return o === "senate" || o === "house" || watched(m); })
-  .sort((a, b) => watched(b) - watched(a));   // pinned races first
+const diag = { pages: {}, types: {} };
+const pageAt = off => get("/race/search", { country: "US", startDate: DATE, endDate: DATE, limit: PAGE, offset: off })
+  .then(r => { diag.pages[off] = (r.races || []).length; return r; })
+  .catch(e => { diag.pages[off] = "ERR " + e.message; return null; });
+
+// First page tells us the total; fetch the rest in parallel (each call can take ~45-90s tonight).
+const first = await pageAt(0);
+const total = first?.count ?? 0;
+const rest = [];
+for (let off = PAGE; off < Math.min(total, 20000); off += PAGE) rest.push(pageAt(off));
+const all = [first, ...(await Promise.all(rest))].filter(Boolean).flatMap(r => r.races || []);
+diag.total = total;
 
 const races = [];
-for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 20) {
-  const b = await Promise.all(want.slice(i, i + 20).map(m =>
-    get("/race/" + pick(m, "id", "race_id"), { light: "true" }).then(r => { if (!diag.rawRace) diag.rawRace = JSON.stringify(r).slice(0, 2500); return norm(r, m); }).catch(() => null)));
-  races.push(...b.filter(Boolean));
+for (const m of all) {
+  diag.types[m.type] = (diag.types[m.type] || 0) + 1;
+  const o = office(m);
+  if (o === "other") continue;
+  const cands = (m.candidates || [])
+    .filter(c => c.votes > 0 || c.winner || (c.party && !/write-?in|nonpartisan/i.test(c.party)))
+    .map(c => ({ name: c.name, party: party(c.party), votes: c.votes || 0, won: !!c.winner }))
+    .sort((a, b) => b.votes - a.votes);
+  const r = { state: String(m.province || "").toUpperCase(), district: m.district || "", office: o,
+    name: m.election_name, rep: m.percent_reporting ?? null, cands };
+  // Full detail only for pinned races; the rest just need the call for seat totals.
+  races.push(WATCH.includes(`${r.state} ${o}`) ? r
+    : { state: r.state, office: o, cands: cands.filter(c => c.won).map(c => ({ party: c.party, won: true })) });
 }
 
-// Keep the file small: full detail only for watched races; just the call for the rest.
-const out = races.map(r => WATCH.includes(`${r.state} ${r.office}`) ? r
-  : { state: r.state, office: r.office, cands: r.cands.filter(c => c.won).map(c => ({ party: c.party, won: true })) });
-
-writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out, diag }));
-console.log(`${Date.now() > DEADLINE ? "PARTIAL (deadline) " : ""}search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
-if (metas[0]) console.log("sample search item keys:", Object.keys(metas[0]).join(","));
+writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: all.length, races, diag }));
+console.log(`fetched ${all.length}/${total}; kept ${races.length}`, JSON.stringify(diag.pages));
