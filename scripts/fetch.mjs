@@ -18,7 +18,7 @@ const st = o => String(pick(o, "province", "state") || "").slice(0, 2).toUpperCa
 async function get(path, params = {}) {
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(60000) });
+      const r = await fetch(BASE + path + "?" + new URLSearchParams(params), { headers: { "User-Agent": "election26-pages" }, signal: AbortSignal.timeout(90000) });
       if (r.ok) return r.json();
       console.log(`${path} ${JSON.stringify(params)} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       if (r.status < 500 && r.status !== 429) throw new Error(`HTTP ${r.status}`);
@@ -46,28 +46,28 @@ function norm(raw, meta) {
 
 const metas = [];
 // Targeted searches instead of paging every local race on the ballot.
-const DEADLINE = Date.now() + 6 * 60e3;
+const DEADLINE = Date.now() + 9 * 60e3;
 const seen = new Set(), diag = { searches: {}, rawSearch: null, rawSearchTop: null, rawRace: null };
-for (const query of ["Senate", "Governor", "House", "Congress"]) {
-  for (let off = 0; off < 1000 && Date.now() < DEADLINE; off += 100) {
-    let p = [];
-    try { const raw = await get("/race/search", { query, country: "US", startDate: DATE, endDate: DATE, limit: 100, offset: off });
-      p = list(raw); diag.searches[`${query}@${off}`] = p.length;
-      if (!diag.rawSearchTop) diag.rawSearchTop = Array.isArray(raw) ? "array" : Object.keys(raw).join(",");
-      if (!diag.rawSearch && p[0]) diag.rawSearch = JSON.stringify(p[0]).slice(0, 1500); }
-    catch (e) { diag.searches[`${query}@${off}`] = "ERR " + e.message; break; }
+const SEARCHES = { Senate: { query: "Senate" }, Governor: { query: "Governor" }, House: { query: "House" },
+  Representative: { query: "Representative" }, all_dated: {} };
+await Promise.all(Object.entries(SEARCHES).map(async ([label, q]) => {
+  try {
+    const raw = await get("/race/search", { ...q, country: "US", startDate: DATE, endDate: DATE, limit: 500 });
+    const p = list(raw);
+    diag.searches[label] = p.length;
+    if (!diag.rawSearchTop) diag.rawSearchTop = Array.isArray(raw) ? "array" : Object.keys(raw).join(",");
+    if (p[0]) diag.samples = { ...(diag.samples || {}), [label]: JSON.stringify(p[0]).slice(0, 1200) };
     for (const m of p) { const id = pick(m, "id", "race_id"); if (!seen.has(id)) { seen.add(id); metas.push(m); } }
-    if (p.length < 100) break;
-  }
-}
+  } catch (e) { diag.searches[label] = "ERR " + e.message; }
+}));
 const watched = m => WATCH.includes(`${st(m)} ${office(pick(m, "election_name", "name"))}`);
 const want = metas.filter(m => { const o = office(pick(m, "election_name", "name"));
   return o === "senate" || o === "house" || watched(m); })
   .sort((a, b) => watched(b) - watched(a));   // pinned races first
 
 const races = [];
-for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 8) {
-  const b = await Promise.all(want.slice(i, i + 8).map(m =>
+for (let i = 0; i < want.length && Date.now() < DEADLINE; i += 20) {
+  const b = await Promise.all(want.slice(i, i + 20).map(m =>
     get("/race/" + pick(m, "id", "race_id"), { light: "true" }).then(r => { if (!diag.rawRace) diag.rawRace = JSON.stringify(r).slice(0, 2500); return norm(r, m); }).catch(() => null)));
   races.push(...b.filter(Boolean));
 }
@@ -79,20 +79,3 @@ const out = races.map(r => WATCH.includes(`${r.state} ${r.office}`) ? r
 writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: metas.length, races: out, diag }));
 console.log(`${Date.now() > DEADLINE ? "PARTIAL (deadline) " : ""}search: ${metas.length} races, kept ${want.length}, fetched ${races.length}`);
 if (metas[0]) console.log("sample search item keys:", Object.keys(metas[0]).join(","));
-
-// Diagnostics: when nothing matched, record what civicAPI actually returns so the filters can be fixed.
-if (!metas.length) {
-  const probe = {};
-  for (const [k, p] of Object.entries({
-    dated: { query: "Senate", country: "US", startDate: DATE, endDate: DATE, limit: 3 },
-    nodate: { query: "Senate", country: "US", limit: 3 },
-    country_only: { country: "US", limit: 3 },
-    dates_api: null,
-  })) {
-    try {
-      const r = p ? await get("/race/search", p) : await get("/getElectionDates", { year: 2026, country: "US" });
-      probe[k] = JSON.stringify(r).slice(0, 1500);
-    } catch (e) { probe[k] = "ERR " + e.message; }
-  }
-  writeFileSync("data.json", JSON.stringify({ updated: new Date().toISOString(), found: 0, races: [], probe }));
-}
