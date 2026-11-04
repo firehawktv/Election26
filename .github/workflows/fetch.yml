@@ -1,0 +1,33 @@
+name: fetch results
+on:
+  push:
+    paths: [".github/workflows/fetch.yml", "scripts/**"]
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"   # restarts the loop if it ever dies
+concurrency:
+  group: fetch
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Loop every 2 minutes
+        run: |
+          git config user.name "results-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in $(seq 1 170); do
+            node scripts/fetch.mjs || echo "fetch failed, keeping last data"
+            if [ -n "$(git status --porcelain data.json)" ]; then
+              git add data.json
+              git commit -qm "results $(date -u +%H:%M)" || true
+              git pull -q --rebase -X theirs origin main && git push -q origin HEAD:main || echo "push failed"
+            fi
+            sleep 120
+          done

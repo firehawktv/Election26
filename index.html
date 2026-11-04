@@ -84,25 +84,17 @@ function norm(raw, meta){
           office:office(name), cands, rep:isNaN(rep)?null:rep, winner};
 }
 
-async function searchAll(){
-  let out=[], off=0;
-  for(;;){ const p=list(await get("/race/search",{country:"US",startDate:DATE,endDate:DATE,limit:100,offset:off}));
-    out=out.concat(p); if(p.length<100||off>6000) break; off+=100; }
-  return out;
-}
-
-// House: tally calls across all House races (fetch details in small batches).
+// data.json is written every ~2 min by the GitHub Action (scripts/fetch.mjs); civicAPI blocks direct browser calls.
+let UPDATED = null;
 async function load(){
-  const metas = (await searchAll()).map(m=>({m, o:office(pick(m,"election_name","name")), s:String(pick(m,"province","state")||"").slice(0,2).toUpperCase()}));
-  const want = metas.filter(x => x.o==="house" || x.o==="senate" ||
-    WATCH.some(([s,o])=>s===x.s && o===x.o));
-  const races=[];
-  for(let i=0;i<want.length;i+=10){
-    const batch = await Promise.all(want.slice(i,i+10).map(x=>
-      get("/race/"+pick(x.m,"id","race_id"),{light:"true"}).then(r=>norm(r,x.m)).catch(()=>null)));
-    races.push(...batch.filter(Boolean));
-  }
-  return races;
+  const r = await fetch("data.json?t="+Date.now(), {cache:"no-store"});
+  if(!r.ok) throw new Error(r.status===404 ? "no data yet — first fetch runs within a few minutes" : r.status);
+  const d = await r.json(); UPDATED = new Date(d.updated);
+  return d.races.map(x=>{
+    const tot = x.cands.reduce((s,c)=>s+(c.votes||0),0)||1;
+    x.cands.forEach(c=>{c.votes=c.votes||0; c.pct=100*c.votes/tot;});
+    return {...x, winner:x.cands.find(c=>c.won)};
+  });
 }
 
 function demo(){
@@ -154,7 +146,7 @@ function render(races){
 async function tick(){
   const err=document.getElementById("err");
   try{ render(DEMO?demo():await load()); err.textContent="";
-    document.getElementById("meta").textContent=`· Nov 3 · updated ${new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}${DEMO?" · DEMO DATA":""}`;
+    document.getElementById("meta").textContent=`· Nov 3 · data as of ${(DEMO||!UPDATED?new Date():UPDATED).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}${DEMO?" · DEMO DATA":""}`;
   }catch(e){ err.textContent=`Fetch failed (${e.message}). Showing last good data.`; }
   setTimeout(tick, EVERY);
 }
